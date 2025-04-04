@@ -31,118 +31,180 @@ library(clusterProfiler)
 library(cowplot)
 library(patchwork)
 library(reshape2)
-library(GSVA)
-library(GSEABase)
 #Figure 2A
-rm(list = ls())
 scobj <- readRDS(file = 'output/GSE157783_annotated.rds')
-scdata <- GetAssayData(scobj, slot = "counts")
-scdata <- apply(scdata,2,function(xx)xx/sum(xx)*1e4)
-scdata <- log2(scdata + 1)
-scobj[['RNA']] <- CreateAssayObject(counts = scdata)
-rm(list = ls(pattern = 'scdata'))
-expr <- AverageExpression(scobj,group.by = 'group',assay = "RNA",slot = 'data')
-expr <- expr[[1]]
-expr <- expr[rowSums(expr)>0,]
-expr <- as.matrix(expr)
-cg = names(tail(sort(apply(expr,1,sd)),1000))
-pheatmap::pheatmap(cor(expr[cg,]))
-geneset <- read.gmt('resource/h.all.v2023.2.Hs.symbols.gmt')
-geneset <- split(geneset$gene,geneset$term)
-geneset <- lapply(geneset,unique)
-geneset <- GeneSetCollection(mapply(function(geneIds,keggId){
-  GeneSet(geneIds,geneIdType = EntrezIdentifier(),
-          collectionType = KEGGCollection(keggId),
-          setName = keggId)
-},geneset,names(geneset)))
-gsva_result <- gsva(as.matrix(expr),geneset)
-gsva <- melt(gsva_result,id.vars = 'Genesets')
-colnames(gsva) <- c("hallmark","celltype","Score")
-gsva$celltype <- factor(gsva$celltype,levels = c("PD",'Control'))
-ggplot(gsva,aes(x = celltype, y = hallmark,color = Score))+
-  geom_point(aes(color=Score),size = 5, alpha = 0.8)+
-  theme(panel.grid = element_blank(),
-        axis.line = element_blank(),
-        axis.ticks = element_blank(),
-        plot.title = element_text(size = 16,hjust = 0.5,color = 'black',face = 'bold'),
-        panel.background = element_rect(color = 'black',size = 1,fill = 'transparent'),
-        axis.text.x=element_text(size=9,color="black",angle=45,hjust = 1), 
-        axis.text.y=element_text(size=12,color="black",face = 'bold'),
-        legend.frame = element_rect(colour = "black"),          
-        legend.ticks = element_line(colour = "black", linewidth  = 0),          
-        legend.key.width = unit(0.3, "cm"),          
-        legend.key.height = unit(0.6, "cm"),          
-        legend.title = element_text(color = 'black', face = "bold", size=8))+
-  scale_color_gradientn(values = seq(0,1,0.1),colors = c("#39489f","#39bbec","#f9ed36","#f38466","#b81f25"))+
-  labs(x=NULL,y=NULL,title = 'GSE157783 Midbrain')+
-  coord_flip()
+Idents(scobj) <- 'celltype'
+metadata <- scobj@meta.data
+dd2 <- data.frame(table(metadata$celltype))
+colnames(dd2) <- c("celltype","num")
+dd2$Celltype <- paste0(dd2$celltype,paste0(" (",dd2$num,")"))
+labels <- dd2$Celltype
+color <- brewer.pal(12,'Paired')
+DimPlot(scobj, reduction = 'tsne', label = F, label.size = 4.5) +  
+  scale_color_manual(values = color,name = 'Celltype',labels = labels) +  
+  theme(panel.background = element_blank(),  
+        legend.title = element_text(size = 14,color = 'black'),
+        legend.text = element_text(size = 12,color = 'black'),
+        plot.title = element_text(size = 16,colour = 'black',hjust = 0.5),
+        axis.line = element_blank(),  
+        axis.title = element_blank(),  
+        axis.ticks = element_blank(),  
+        axis.text = element_blank()) +  
+  labs(title = 'GSE157783 Midbrain')+
+  annotate("segment", 
+           x = -40, xend = -30, 
+           y = -40, yend = -40, 
+           arrow = arrow(type = "closed", length = unit(0.1, "inches")), 
+           color = "black", size = 0.75) +
+  annotate("segment",  
+           x = -40, xend = -40, 
+           y = -40, yend = -30, 
+           arrow = arrow(type = "closed", length = unit(0.1, "inches")), 
+           color = "black", size = 0.75) + 
+  annotate("text",  
+           x = -35, y = -42.5, 
+           label = "tSNE1", size = 4, 
+           color = "black") +
+  annotate("text", 
+           x = -42.5, y = -36, 
+           label = "tSNE2", size = 4, 
+           color = "black", angle = 90) 
 #Figure 2B
+data <- as.data.frame(table(scobj$group,scobj$celltype))
+colnames(data) <- c("group","CellType","Freq")
+data <- data %>% 
+  group_by(group) %>% 
+  mutate(Total = sum(Freq)) %>% 
+  ungroup() %>% 
+  mutate(Percent = Freq/Total) %>% 
+  as.data.frame()
+data$group <- factor(data$group,levels =  c("Control","PD"))
+ggplot(data, aes(x = group, y = Percent, fill = CellType)) +
+  scale_fill_manual(values = color)+
+  geom_bar(position = "fill", stat="identity", 
+           color = 'white', alpha = 0.9, width = 0.8) +
+  scale_y_continuous(labels = scales::percent_format(),expand = c(0, 0))+
+  labs(title = 'Midbrain cellratio',x = NULL,y = NULL)+
+  theme(panel.background = element_rect(fill = 'transparent'), 
+        panel.border = element_blank(),
+        axis.ticks = element_blank(),
+        plot.title = element_text(size = 16,hjust = 0,face = 'bold',vjust = 2,colour = 'black'),
+        legend.text = element_text(size = 14,color = "black"),
+        axis.text.y = element_text(size = 14,color = "black"),
+        axis.text.x = element_text(size = 14,color = "black",angle = 45,hjust = 1)) + 
+  guides(fill=guide_legend(title=NULL))
+#Figure 2C
+markers.all<-FindAllMarkers(scobj,only.pos=TRUE)
+top <- markers.all %>% group_by(cluster) %>% top_n(2, avg_log2FC)
+genes<- c('PLP1',"MOBP",'SLC17A6','FSTL4','FCGR1A','CD74',
+          'PDGFRA',"VCAN","AQP4","GFAP","CLDN5","PECAM1",
+          "COL1A2","PDGFRB","GATA3","GAD1","FOXJ1","ADGB",
+          "FGF5","FAT2","GRIK1","DMBX1","TH","SLC6A3")
+aver <- AverageExpression(scobj,features= genes,group.by = 'celltype',slot= 'data')
+aver <- as.data.frame(aver$RNA)
+marker<- data.frame(marker = top$cluster,row.names = genes)
+celltype<- data.frame(celltype = colnames(aver), row.names = colnames(aver))
+names(color) <- celltype$celltype
+anno_col<- list(celltype = color,marker= color)
+pheatmap(as.matrix(aver),
+         scale= 'row',
+         show_colnames = F,
+         cluster_rows= FALSE,
+         cluster_cols= FALSE,
+         annotation_names_row = FALSE,
+         annotation_names_col = FALSE,
+         annotation_col= celltype,
+         annotation_row= marker,
+         annotation_colors= anno_col, 
+         color= colorRampPalette(c("#1F78B4","white", "#E31A1C"))(100),
+         border_color= 'white',fontsize = 11) 
+#Figure 2D
 rm(list = ls())
 scobj <- readRDS(file = 'output/GSE243639_annotated.rds')
-scdata <- GetAssayData(scobj, slot = "counts")
-scdata <- apply(scdata,2,function(xx)xx/sum(xx)*1e4)
-scdata <- log2(scdata + 1)
-scobj[['RNA']] <- CreateAssayObject(counts = scdata)
-rm(list = ls(pattern = 'scdata'))
-expr <- AverageExpression(scobj,group.by = 'group',assay = "RNA",slot = 'data')
-expr <- expr[[1]]
-expr <- expr[rowSums(expr)>0,]
-expr <- as.matrix(expr)
-cg = names(tail(sort(apply(expr,1,sd)),1000))
-pheatmap::pheatmap(cor(expr[cg,]))
-geneset <- read.gmt('resource/h.all.v2023.2.Hs.symbols.gmt')
-geneset <- split(geneset$gene,geneset$term)
-geneset <- lapply(geneset,unique)
-geneset <- GeneSetCollection(mapply(function(geneIds,keggId){
-  GeneSet(geneIds,geneIdType = EntrezIdentifier(),
-          collectionType = KEGGCollection(keggId),
-          setName = keggId)
-},geneset,names(geneset)))
-gsva_result <- gsva(as.matrix(expr),geneset)
-gsva <- melt(gsva_result,id.vars = 'Genesets')
-colnames(gsva) <- c("hallmark","celltype","Score")
-gsva$celltype <- factor(gsva$celltype,levels = c("PD",'Control'))
-ggplot(gsva,aes(x = celltype, y = hallmark,color = Score))+
-  geom_point(aes(color=Score),size = 5, alpha = 0.8)+
-  theme(panel.grid = element_blank(),
-        axis.line = element_blank(),
+Idents(scobj) <- 'celltype'
+color <- brewer.pal(12,'Paired')
+metadata <- scobj@meta.data
+dd2 <- data.frame(table(metadata$celltype))
+colnames(dd2) <- c("celltype","num")
+dd2$Celltype <- paste0(dd2$celltype,paste0(" (",dd2$num,")"))
+labels <- dd2$Celltype
+DimPlot(scobj, reduction = 'tsne', label = F, label.size = 4.5) +  
+  scale_color_manual(values = color,name = 'Celltype',labels = labels) +  
+  theme(panel.background = element_blank(),  
+        legend.title = element_text(size = 14,color = 'black'),
+        legend.text = element_text(size = 12,color = 'black'),
+        plot.title = element_text(size = 16,colour = 'black',hjust = 0.5),
+        axis.line = element_blank(),  
+        axis.title = element_blank(),  
+        axis.ticks = element_blank(),  
+        axis.text = element_blank()) +  
+  labs(title = 'GSE243639 Substantia nigra compacta')+
+  annotate("segment", 
+           x = -40, xend = -30, 
+           y = -40, yend = -40, 
+           arrow = arrow(type = "closed", length = unit(0.1, "inches")), 
+           color = "black", size = 0.75) +
+  annotate("segment",  
+           x = -40, xend = -40, 
+           y = -40, yend = -30, 
+           arrow = arrow(type = "closed", length = unit(0.1, "inches")), 
+           color = "black", size = 0.75) + 
+  annotate("text",  
+           x = -35, y = -42.5, 
+           label = "tSNE1", size = 4, 
+           color = "black") +
+  annotate("text", 
+           x = -42.5, y = -36, 
+           label = "tSNE2", size = 4, 
+           color = "black", angle = 90) 
+#Figure 2E
+data <- as.data.frame(table(scobj$group,scobj$celltype))
+colnames(data) <- c("group","CellType","Freq")
+data <- data %>% 
+  group_by(group) %>% 
+  mutate(Total = sum(Freq)) %>% 
+  ungroup() %>% 
+  mutate(Percent = Freq/Total) %>% 
+  as.data.frame()
+data$group <- factor(data$group,levels =  c("Control","PD"))
+ggplot(data, aes(x = group, y = Percent, fill = CellType)) +
+  scale_fill_manual(values = color)+
+  geom_bar(position = "fill", stat="identity", color = 'white', alpha = 0.9, width = 0.8) +
+  scale_y_continuous(labels = scales::percent_format(),
+                     expand = c(0, 0))+
+  labs(title = 'Substantia nigra compacta cellratio',x = NULL,y = NULL)+
+  theme(panel.background = element_rect(fill = 'transparent'), 
+        panel.border = element_blank(),
         axis.ticks = element_blank(),
-        plot.title = element_text(size = 16,hjust = 0.5,color = 'black',face = 'bold'),
-        panel.background = element_rect(color = 'black',size = 1,fill = 'transparent'),
-        axis.text.x=element_text(size=9,color="black",angle=45,hjust = 1), 
-        axis.text.y=element_text(size=12,color="black",face = 'bold'),
-        legend.frame = element_rect(colour = "black"),          
-        legend.ticks = element_line(colour = "black", linewidth  = 0),          
-        legend.key.width = unit(0.3, "cm"),          
-        legend.key.height = unit(0.6, "cm"),          
-        legend.title = element_text(color = 'black', face = "bold", size=8))+
-  scale_color_gradientn(values = seq(0,1,0.1),colors = c("#39489f","#39bbec","#f9ed36","#f38466","#b81f25"))+
-  labs(x=NULL,y=NULL,title = 'GSE243639 Substantia nigra compacta')+
-  coord_flip()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        plot.title = element_text(size = 14,hjust = 0,face = 'bold',
+                                  vjust = 2,colour = 'black'),
+        legend.text = element_text(size = 14,color = "black"),
+        axis.text.y = element_text(size = 14,color = "black"),
+        axis.text.x = element_text(size = 14,color = "black",angle = 45,hjust = 1)) + 
+  guides(fill=guide_legend(title=NULL))
+#Figure 2F
+markers.all<-FindAllMarkers(scobj,only.pos=TRUE)
+top <- markers.all %>% group_by(cluster) %>% top_n(3, avg_log2FC)
+color <- brewer.pal(7,'Paired')
+genes<- c("AQP4","GFAP","SLC1A3",'PLP1',"MOBP","ST18",
+          'FCGR1A','CD74',"CD163","SNAP25","SYT1","NRG1",
+          "DCN","FLT1","CLDN5","TRAC","CD3E","IL7R",
+          'PDGFRA',"VCAN","GPR17")
+aver <- AverageExpression(scobj,features= genes, group.by = 'celltype',slot= 'data')
+aver <- as.data.frame(aver$RNA)
+marker<- data.frame(marker = top$cluster,row.names = genes)
+celltype<- data.frame(celltype = colnames(aver),row.names = colnames(aver))
+names(color) <- celltype$celltype
+anno_col<- list(celltype = color,marker= color)
+pheatmap(as.matrix(aver),
+         scale= 'row',
+         show_colnames = F,
+         cluster_rows= FALSE,
+         cluster_cols= FALSE,
+         annotation_names_row = FALSE,
+         annotation_names_col = FALSE,
+         annotation_col= celltype,
+         annotation_row= marker,
+         annotation_colors= anno_col, 
+         color= colorRampPalette(c("#1F78B4","white", "#E31A1C"))(100),
+         border_color= 'white',fontsize = 11) 
